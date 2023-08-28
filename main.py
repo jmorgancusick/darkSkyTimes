@@ -9,10 +9,19 @@ from calendar import monthrange
 from openpyxl import load_workbook
 from openpyxl.styles import numbers
 import tzlocal
+import astral
 
+import datetime
+from astral import LocationInfo
+from astral import Observer
+from astral.geocoder import database, lookup
+from astral.sun import sun, night
+from astral.moon import moonrise, moonset
+from astral import Depression
 
+from dateutil.rrule import rrule, DAILY
 
-
+format_data = "%m/%d/%y %H:%M:%S.%f %Z"
 
 def main():
     ROW_OFFSET = 1
@@ -194,7 +203,7 @@ class AstroDay:
         self.twilight_start = None
 
     def populate_astro_data (self, obs):
-        # To get the moon set and twilight end for today, we need to ask ephem the next setting of the moon and sun
+        # To get the moon set and dusk for today, we need to ask ephem the next setting of the moon and sun
         # starting with midnight today in this timezone.
         midnight_tonight = datetime.datetime.combine(self.day, datetime.datetime.min.time(), tzinfo=tzlocal.get_localzone())
         e_date = ephem.Date(midnight_tonight)
@@ -202,9 +211,9 @@ class AstroDay:
         obs.horizon = '0'
         moon_set_unaware_dt = obs.next_setting(ephem.Moon()).datetime()
         obs.horizon = '-18'
-        twilight_end_unaware_dt = obs.next_setting(ephem.Sun(), use_center=True).datetime()
+        dusk_unaware_dt = obs.next_setting(ephem.Sun(), use_center=True).datetime()
 
-        # To get the moon rise and twilight start for today, we need to ask ephem for the previous rising
+        # To get the moon rise and dawn for today, we need to ask ephem for the previous rising
         # of the moon and sun starting with midnight tomorrow in this timezone.
         midnight_tomorrow = datetime.datetime.combine(self.day + datetime.timedelta(days=1), datetime.datetime.min.time(),
                                                      tzinfo=tzlocal.get_localzone())
@@ -213,7 +222,7 @@ class AstroDay:
         obs.horizon = '0'
         moon_rise_unaware_dt = obs.previous_rising(ephem.Moon()).datetime()
         obs.horizon = '-18'
-        twilight_start_unaware_dt = obs.previous_rising(ephem.Sun(), use_center=True).datetime()
+        dawn_unaware_dt = obs.previous_rising(ephem.Sun(), use_center=True).datetime()
 
         # Calculate the moonrise and moonset times
         # moon_set_unaware_dt = obs.next_setting(ephem.Moon()).datetime()
@@ -226,14 +235,14 @@ class AstroDay:
 
         self.moon_set = pytz.utc.localize(moon_set_unaware_dt)
         self.moon_rise = pytz.utc.localize(moon_rise_unaware_dt)
-        self.twilight_start = pytz.utc.localize(twilight_start_unaware_dt)
-        self.twilight_end = pytz.utc.localize(twilight_end_unaware_dt)
+        self.dawn = pytz.utc.localize(dawn_unaware_dt)
+        self.dusk = pytz.utc.localize(dusk_unaware_dt)
 
 
 def test():
 
     print("hello")
-    today = datetime.date(year=2023, month=5, day=30)
+    today = datetime.date(year=2023, month=5, day=17)
     d = AstroDay(today)
     print(d)
 
@@ -246,14 +255,148 @@ def test():
 
     d.populate_astro_data(obs)
     print(d)
-    print(d.moon_rise.astimezone().isoformat())
-    print(d.moon_set.astimezone().isoformat())
-    print(d.twilight_start.astimezone().isoformat())
-    print(d.twilight_end.astimezone().isoformat())
+    print()
+    print('========= Ephem ===========')
+    print(f'dawn: {d.dawn.astimezone().strftime(format_data)}')
+    print(f'dusk: {d.dusk.astimezone().strftime(format_data)}')
+    print(f'moon rise: {d.moon_rise.astimezone().strftime(format_data)}')
+    print(f'moon set: {d.moon_set.astimezone().strftime(format_data)}')
+    print()
+
+def roundTime(dt=None, roundTo=60):
+   """Round a datetime object to any time lapse in seconds
+   dt : datetime.datetime object, default now.
+   roundTo : Closest number of seconds to round to, default 1 minute.
+   Author: Thierry Husson 2012 - Use it as you want but don't blame me.
+   """
+   if dt == None : dt = datetime.datetime.now()
+   seconds = (dt.replace(tzinfo=None) - dt.min).seconds
+   rounding = (seconds+roundTo/2) // roundTo * roundTo
+   return dt + datetime.timedelta(0,rounding-seconds,-dt.microsecond)
+
+def test_astral():
+    city = lookup("Salt Lake City", database())
+    # print((
+    #     f"Information for {city.name}/{city.region}\n"
+    #     f"Timezone: {city.timezone}\n"
+    #     f"Latitude: {city.latitude:.02f}; Longitude: {city.longitude:.02f}\n"
+    #     f"Elevation: {city.observer.elevation:.02f}" # doesn't have elevation data sadly
+    # ))
+
+    lat = 40.7720
+    lon = -112.1012
+    bird_sanctuary = Observer(lat, lon)
+
+    # don't need to account for elevation https://stackoverflow.com/questions/7662543/results-for-observer-seemingly-not-accounting-for-elevation-effects-in-pyephem
+
+    # print((
+    #     f"Latitude: {bird_sanctuary.latitude:.02f}; Longitude: {bird_sanctuary.longitude:.02f}\n"
+    #     f"Elevation: {bird_sanctuary.elevation:.02f}"
+    # ))
+
+    day = datetime.date(year=2023, month=5, day=30)
+
+    # s = sun(bird_sanctuary, date=day, dawn_dusk_depression=Depression.ASTRONOMICAL)
+    s = sun(bird_sanctuary, date=day, dawn_dusk_depression=Depression.ASTRONOMICAL, tzinfo=tzlocal.get_localzone())
+
+    # print('====================')
+    # print((
+    #     f'Dawn:    {s["dawn"].astimezone().strftime(format_data)}\n'
+    #     # f'Sunrise: {s["sunrise"].astimezone().isoformat()}\n'
+    #     # f'Noon:    {s["noon"].astimezone().isoformat()}\n'
+    #     # f'Sunset:  {s["sunset"].astimezone().isoformat()}\n'
+    #     f'Dusk:    {s["dusk"].astimezone().strftime(format_data)}\n'
+    # ))
+
+    print(s["dusk"])
+
+    mrise = moonrise(bird_sanctuary, date=day, tzinfo=tzlocal.get_localzone())
+    mset = moonset(bird_sanctuary, date=day, tzinfo=tzlocal.get_localzone())
+    print('========= Astral ===========')
+    print((
+        f'Dawn:    {s["dawn"].strftime(format_data)}\n'
+        f'Dusk:    {s["dusk"].strftime(format_data)}\n'
+        f'Moonrise: {mrise.strftime(format_data)}\n'
+        f'Moonset:  {mset.strftime(format_data)}\n'
+    ))
+
+    # # this appears to be way off
+    # n = night(bird_sanctuary, date=day, tzinfo=tzlocal.get_localzone())
+    # print((
+    #     f'night start:  {n[0].strftime(format_data)}\n'
+    #     f'night end:    {n[1].strftime(format_data)}\n'
+    # ))
+
+
+class AstralDay:
+    def __init__(self, day, lat, lon):
+        self.day = day
+        self.obs = Observer(lat, lon)
+
+        s = sun(self.obs, date=self.day, dawn_dusk_depression=Depression.ASTRONOMICAL, tzinfo=tzlocal.get_localzone())
+        self.dawn = s["dawn"]
+        self.dusk = s["dusk"]
+
+        try:
+            self.moon_rise = moonrise(self.obs, date=self.day, tzinfo=tzlocal.get_localzone())
+        except ValueError as e:
+            if str(e) != "Moon never rises on this date, at this location":
+                raise
+            self.moon_rise = None
+
+        try:
+            self.moon_set = moonset(self.obs, date=self.day, tzinfo=tzlocal.get_localzone())
+        except ValueError as e:
+            if str(e) != "Moon never sets on this date, at this location":
+                raise
+            self.moon_set = None
+
+    def __str__(self):
+        dt_fmt = "%I:%M %p %Z"
+
+        if self.moon_rise:
+            moon_rise_str = self.moon_rise.strftime(dt_fmt)
+        else:
+            moon_rise_str = ' -          '
+
+        if self.moon_set:
+            moon_set_str = self.moon_set.strftime(dt_fmt)
+        else:
+            moon_set_str = ' -          '
+
+        return f'| {self.day.strftime("%m/%d/%y")} | {self.dawn.strftime(dt_fmt)} | {self.dusk.strftime(dt_fmt)} | {moon_rise_str} | {moon_set_str} |'
+
+
+def test_loop_astral():
+    lat = 40.7720
+    lon = -112.1012
+
+    start = datetime.date(year=2023, month=5, day=1)
+    end = datetime.date(year=2023, month=5, day=31)
+
+    print('+----------+--------------+--------------+--------------+--------------+')
+    print('| Date     | Dawn         | Dusk         | Moon Rise    | Moon Set     |')
+    print('+----------+--------------+--------------+--------------+--------------+')
+
+    for day in rrule(DAILY, dtstart=start, until=end):
+        print(AstralDay(day, lat, lon))
+
+def test_17():
+    print("====== test missing data on 5/17/23 =========")
+    day = datetime.date(year=2023, month=5, day=17)
+
+    slc = lookup("Salt Lake City", database())
+    try:
+        print(moonset(slc.observer, day, tzinfo=tzlocal.get_localzone()).strftime(format_data))
+    except ValueError as e:
+        print(f'caught exception: {str(e)}')
 
 if __name__ == "__main__":
 #    main()
     test()
+    test_astral()
+    test_loop_astral()
+    test_17()
 
 # TODO
 # Throw out or set to none when ephem returns a date time that isn't today.
